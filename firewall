@@ -1,0 +1,91 @@
+#!/bin/bash
+
+### BEGIN INIT INFO
+# Default-Start:     4
+### END INIT INFO
+
+[ -x /etc/init.d/firewall ] || exit 0
+
+FW_start() {
+
+# Ne pas casser les connexions actives
+iptables -t filter -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -t filter -A OUTPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -t filter -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+
+## Règles input pour vmbr0
+
+# Refuser connexion SSH sur l'IP privée
+iptables -A INPUT -i vmbr0 -d 51.15.23.14 -p tcp --dport 22 -j DROP
+
+# Refuser la connexion à la WebUI de Proxmox sur l'IP publique
+iptables -A INPUT -i vmbr0 -d 51.15.23.14 -p tcp --dport 8006 -j DROP
+
+## Règles output pour vmbr0
+
+# Refuser port SSH à sortir depuis l'IP publique
+iptables -A OUTPUT -o vmbr0 -s 51.15.23.14 -p tcp --dport 22 -j DROP
+
+# Refuser WebUI Proxmox depuis vmbr0
+iptables -A OUTPUT -o vmbr0 -s 51.15.23.14 -p tcp --dport 8006 -j DROP
+
+### Hôte Proxmox en tant que serveur
+
+# Refuser connexions SSH
+iptables -A OUTPUT -o vmbr0 -s 51.15.23.14 -p tcp --sport 22 -j DROP
+
+# Refuser la connexion sur la web interface 
+iptables -A OUTPUT -o vmbr0 -s 51.15.23.14 -p tcp --sport 8006 -j DROP
+
+#Ajouter la route pour administrer Proxmox depuis le LAN
+route add -net 192.168.20.0 netmask 255.255.255.0 gw 192.168.10.254 dev vmbr1
+
+}
+
+FW_stop() {
+
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t nat -X
+iptables -t mangle -F
+iptables -t mangle -X
+iptables -P INPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
+ip route del 192.168.10.0/24
+
+}
+
+FW_restart() {
+FW_stop;
+sleep 2;
+FW_start;
+}
+
+case "$1" in
+'start')
+FW_start
+;;
+
+'stop')
+FW_stop
+;;
+
+'restart')
+FW_restart
+;;
+
+'status')
+iptables -nvL
+;;
+
+*)
+echo "Usage: firewall {start|stop|restart|status}"
+;;
+esac
+
+
+#Notre script ce lance au Runlevel 4 quand l'utilisateur peut etre défini
+#Ce script va permettre de ne plus exposer sur l'ip publique notre SSH et la web interface
+#Puis il va nous permettre l'accès via le LAN à notre web interface (ici via VPN sur 192.168.20.0)
